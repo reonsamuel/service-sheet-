@@ -1,0 +1,7 @@
+{
+  "name": "CAGE Antigua Ops",
+  "description": "Digital Service Call Sheet & Technician Portal",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
