@@ -9,7 +9,7 @@ import SettingsModal from './components/SettingsModal';
 import { PenIcon, ClockIcon, CalendarIcon, CameraIcon, SendIcon, XIcon, SaveIcon, FolderIcon, CheckIcon, LogoutIcon, UserIcon, SettingsIcon } from './components/ui/Icons';
 import { storage, db } from './firebase-config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, addDoc, query, where, getDocs, orderBy, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, getDocs, orderBy, serverTimestamp, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 // Reusable components for the form
 const Label: React.FC<{ children?: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
@@ -189,11 +189,30 @@ export default function App() {
       }
   };
 
-  const handleLogout = async () => {
-      if (window.confirm("Are you sure you want to log out?")) {
+  const handleLogout = async (skipConfirm = false) => {
+      if (skipConfirm || window.confirm("Are you sure you want to log out?")) {
           setCurrentUser(null);
           localStorage.removeItem('cage_last_user_id');
           setFormData(INITIAL_DATA);
+      }
+  };
+
+  const handleDeleteAccount = async () => {
+      if (!currentUser) return;
+      if (window.confirm("WARNING: Are you sure you want to delete your account? This cannot be undone.")) {
+          try {
+              // Delete user document
+              await deleteDoc(doc(db, 'technicians', currentUser.id));
+              
+              // Logout immediately without confirmation
+              setCurrentUser(null);
+              localStorage.removeItem('cage_last_user_id');
+              setFormData(INITIAL_DATA);
+              setShowSettings(false);
+          } catch (e) {
+              console.error("Error deleting account", e);
+              alert("Failed to delete account from cloud.");
+          }
       }
   };
 
@@ -499,7 +518,7 @@ export default function App() {
                 <FolderIcon className="w-5 h-5 md:w-6 md:h-6 text-yellow-300" />
             </button>
              <button 
-                onClick={handleLogout}
+                onClick={() => handleLogout()}
                 className="bg-white/20 hover:bg-red-900/50 p-2 md:p-3 rounded-lg transition-colors flex items-center gap-2 border border-white/30 backdrop-blur-sm shadow-md"
                 title="Logout"
             >
@@ -922,6 +941,7 @@ export default function App() {
             onClose={() => setShowSettings(false)}
             currentUser={currentUser}
             onUpdateProfile={handleUpdateProfile}
+            onDeleteAccount={handleDeleteAccount}
             theme={theme}
             onToggleTheme={toggleTheme}
         />

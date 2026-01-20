@@ -7,6 +7,7 @@ interface SettingsModalProps {
   onClose: () => void;
   currentUser: Technician;
   onUpdateProfile: (updatedTech: Technician) => void;
+  onDeleteAccount: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
 }
@@ -16,6 +17,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose, 
   currentUser, 
   onUpdateProfile,
+  onDeleteAccount,
   theme,
   onToggleTheme
 }) => {
@@ -25,6 +27,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   
   // Reset Confirmation State
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showDeleteAccountConfirm, setShowDeleteAccountConfirm] = useState(false);
 
   useEffect(() => {
     setFormData(currentUser);
@@ -154,6 +157,41 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                         {isSaved ? <CheckIcon className="w-5 h-5" /> : null}
                         {isSaved ? 'CHANGES SAVED!' : 'SAVE PROFILE CHANGES'}
                     </button>
+
+                    {/* Delete Account Section */}
+                    <div className="pt-8 mt-4 border-t-2 border-dashed border-gray-300 dark:border-slate-700 text-center">
+                        <h3 className="text-xs font-black uppercase text-gray-400 tracking-wider mb-3">Account Management</h3>
+                        
+                        {!showDeleteAccountConfirm ? (
+                             <button 
+                                onClick={() => setShowDeleteAccountConfirm(true)}
+                                className="text-red-500 hover:text-red-700 text-xs font-bold underline decoration-dotted uppercase tracking-wide"
+                             >
+                                Delete My Account Permanently
+                             </button>
+                        ) : (
+                             <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 animate-fade-in">
+                                <p className="text-red-800 dark:text-red-200 font-bold mb-2 text-sm">Delete Account?</p>
+                                <p className="text-xs text-red-600 dark:text-red-300 mb-4">
+                                    This will remove your profile from the cloud database. You will need to create a new profile to log in again.
+                                </p>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => setShowDeleteAccountConfirm(false)}
+                                        className="flex-1 py-2 bg-white dark:bg-slate-800 text-gray-600 dark:text-gray-300 text-xs font-bold rounded shadow-sm border"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        onClick={onDeleteAccount}
+                                        className="flex-1 py-2 bg-red-600 text-white text-xs font-bold rounded shadow-sm hover:bg-red-700"
+                                    >
+                                        Delete Forever
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -274,7 +312,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
                         )}
                         
                         {!showResetConfirm && (
-                            <p className="text-xs text-gray-500 mt-2 text-center">Deletes all local users, history, and settings.</p>
+                            <p className="text-xs text-gray-500 mt-2 text-center">Deletes all local users, history, and settings from this device.</p>
                         )}
                     </div>
                 </div>

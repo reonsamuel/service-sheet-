@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Technician } from '../types';
-import { UserIcon, XIcon, TrashIcon } from './ui/Icons';
+import { UserIcon, XIcon } from './ui/Icons'; // Removed TrashIcon from imports
 import { db } from '../firebase-config';
-import { collection, addDoc, onSnapshot, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore'; // Removed deleteDoc, doc from imports
 
 interface LoginScreenProps {
   onLogin: (tech: Technician) => void;
@@ -76,18 +76,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     }
   };
 
-  const handleDeleteUser = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (window.confirm("Delete this profile globally? This cannot be undone.")) {
-      try {
-        await deleteDoc(doc(db, 'technicians', id));
-      } catch (err) {
-        console.error("Error deleting user", err);
-        alert("Failed to delete user.");
-      }
-    }
-  };
-
   const initiateLogin = (user: Technician) => {
     setSelectedUser(user);
     setPinInput('');
@@ -143,7 +131,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               <div className="w-8 h-8 border-4 border-black rotate-45"></div>
            </div>
            <h1 className="text-xl font-black text-white uppercase tracking-widest text-center">CAGE Antigua</h1>
-           <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Cloud Portal</p>
+           <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Beta</p>
         </div>
 
         {/* Content Area */}
@@ -176,12 +164,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                         <p className="text-xs text-gray-500 font-mono">{user.vehicleNumber}</p>
                       </div>
                     </div>
-                    <button 
-                      onClick={(e) => handleDeleteUser(user.id, e)}
-                      className="text-gray-300 hover:text-red-500 p-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <TrashIcon className="w-5 h-5" />
-                    </button>
+                    {/* Delete button removed */}
                   </div>
                 ))}
 
