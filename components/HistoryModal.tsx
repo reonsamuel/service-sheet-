@@ -12,7 +12,7 @@ interface HistoryModalProps {
   isOpen: boolean;
   onClose: () => void;
   history: HistoryItem[];
-  onLoad: (data: ServiceFormData) => void;
+  onLoad: (data: ServiceFormData, id: string) => void;
   onDelete: (id: string) => void;
 }
 
@@ -46,7 +46,7 @@ const HistoryModal: React.FC<HistoryModalProps> = ({ isOpen, onClose, history, o
               <div 
                 key={item.id} 
                 onClick={() => {
-                   onLoad(item.data);
+                   onLoad(item.data, item.id);
                    onClose();
                 }}
                 className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow flex justify-between items-center gap-4 group cursor-pointer hover:bg-blue-50/50"

@@ -65,6 +65,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<Technician | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
   const [formData, setFormData] = useState<ServiceFormData>(INITIAL_DATA);
+  const [currentDocId, setCurrentDocId] = useState<string | null>(null); // Track ID of currently edited doc
   const [activeSignatureField, setActiveSignatureField] = useState<'tech' | 'agent' | 'official' | null>(null);
   const [activeTimeField, setActiveTimeField] = useState<'arrival' | 'departure' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -133,10 +134,11 @@ export default function App() {
   const loadCloudHistory = async () => {
     if (!currentUser) return;
     try {
+        // Removed 'orderBy' from the query to prevent "Missing Index" errors on new databases.
+        // We will sort client-side instead.
         const q = query(
             collection(db, 'service_reports'), 
-            where('techId', '==', currentUser.id),
-            orderBy('timestamp', 'desc')
+            where('techId', '==', currentUser.id)
         );
         const snapshot = await getDocs(q);
         const items: HistoryItem[] = snapshot.docs.map(doc => ({
@@ -144,6 +146,10 @@ export default function App() {
             timestamp: doc.data().timestamp?.toMillis() || Date.now(),
             data: doc.data() as ServiceFormData
         }));
+        
+        // Sort in memory (Newest first)
+        items.sort((a, b) => b.timestamp - a.timestamp);
+        
         setHistory(items);
     } catch (e) {
         console.error("Failed to load history", e);
@@ -163,6 +169,7 @@ export default function App() {
         vehicleNumber: tech.vehicleNumber,
         techSignature: null 
     }));
+    setCurrentDocId(null);
   };
 
   const handleUpdateProfile = async (updatedTech: Technician) => {
@@ -194,6 +201,7 @@ export default function App() {
           setCurrentUser(null);
           localStorage.removeItem('cage_last_user_id');
           setFormData(INITIAL_DATA);
+          setCurrentDocId(null);
       }
   };
 
@@ -208,6 +216,7 @@ export default function App() {
               setCurrentUser(null);
               localStorage.removeItem('cage_last_user_id');
               setFormData(INITIAL_DATA);
+              setCurrentDocId(null);
               setShowSettings(false);
           } catch (e) {
               console.error("Error deleting account", e);
@@ -247,20 +256,30 @@ export default function App() {
     setSaveStatus('saving');
     
     try {
-        // Save to Cloud
-        await addDoc(collection(db, 'service_reports'), {
-            ...formData,
-            techId: currentUser.id,
-            timestamp: serverTimestamp()
-        });
+        if (currentDocId) {
+            // Update existing draft
+            const docRef = doc(db, 'service_reports', currentDocId);
+            await updateDoc(docRef, {
+                ...formData,
+                timestamp: serverTimestamp()
+            });
+        } else {
+            // Create new draft
+            const docRef = await addDoc(collection(db, 'service_reports'), {
+                ...formData,
+                techId: currentUser.id,
+                timestamp: serverTimestamp()
+            });
+            setCurrentDocId(docRef.id); // Set the ID so future saves update this one
+        }
         
-        // Reload history to show new item
+        // Reload history to show updated item
         await loadCloudHistory();
         
         setSaveStatus('success');
     } catch (e) {
         console.error("Save failed", e);
-        alert("Failed to save to cloud. Please check connection.");
+        alert("Failed to save to cloud. Please check your connection.");
         setSaveStatus('idle');
     }
 
@@ -269,17 +288,29 @@ export default function App() {
     }, 2000);
   };
 
-  const deleteHistoryItem = (id: string) => {
-    // This is view-only deletion for now in the modal prop, 
-    // but in a real app you might want to deleteDoc(doc(db, 'service_reports', id))
-    // For safety, we'll just remove from local view
-    const newHistory = history.filter(item => item.id !== id);
-    setHistory(newHistory);
+  const deleteHistoryItem = async (id: string) => {
+    if(window.confirm("Delete this draft permanently?")) {
+        try {
+            await deleteDoc(doc(db, 'service_reports', id));
+            // Update local state
+            const newHistory = history.filter(item => item.id !== id);
+            setHistory(newHistory);
+            
+            // If deleting currently loaded doc, clear the ID
+            if (id === currentDocId) {
+                setCurrentDocId(null);
+            }
+        } catch (e) {
+            console.error("Error deleting document", e);
+            alert("Failed to delete document.");
+        }
+    }
   };
 
-  const loadHistoryItem = (data: ServiceFormData) => {
+  const loadHistoryItem = (data: ServiceFormData, id: string) => {
     if (window.confirm("Loading this document will replace your current unsaved changes. Continue?")) {
       setFormData(data);
+      setCurrentDocId(id); // Set the ID so saving updates THIS document
     }
   };
 
