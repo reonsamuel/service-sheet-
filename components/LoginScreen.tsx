@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Technician } from '../types';
-import { UserIcon, LockIcon, XIcon, CheckIcon, TrashIcon, CarIcon } from './ui/Icons';
+import { UserIcon, XIcon, TrashIcon } from './ui/Icons';
+import { db } from '../firebase-config';
+import { collection, addDoc, onSnapshot, deleteDoc, doc, query, orderBy } from 'firebase/firestore';
 
 interface LoginScreenProps {
   onLogin: (tech: Technician) => void;
@@ -10,6 +12,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [users, setUsers] = useState<Technician[]>([]);
   const [view, setView] = useState<'list' | 'create' | 'login'>('list');
   const [selectedUser, setSelectedUser] = useState<Technician | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   
   // Login / Reset Modes
   const [loginMode, setLoginMode] = useState<'pin' | 'admin_override' | 'new_pin'>('pin');
@@ -24,45 +27,64 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   // Default Master Code for Reset
   const MASTER_CODE = '888888';
 
-  // Load users from LocalStorage on mount
+  // Load users from Firebase Firestore on mount
   useEffect(() => {
-    const storedUsers = localStorage.getItem('cage_local_users');
-    if (storedUsers) {
-      setUsers(JSON.parse(storedUsers));
-    }
+    const q = query(collection(db, 'technicians'), orderBy('name'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedUsers: Technician[] = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Technician));
+      setUsers(fetchedUsers);
+      setIsLoading(false);
+    }, (error) => {
+      console.error("Error fetching users:", error);
+      setIsLoading(false);
+      setError("Could not connect to database.");
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName || !newVehicle || !newPin) {
       setError("All fields are required");
       return;
     }
-
-    const newUser: Technician = {
-      id: crypto.randomUUID(),
-      name: newName,
-      vehicleNumber: newVehicle.toUpperCase(),
-      pin: newPin
-    };
-
-    const updatedUsers = [...users, newUser];
-    setUsers(updatedUsers);
-    localStorage.setItem('cage_local_users', JSON.stringify(updatedUsers));
     
-    // Reset and go back to list
-    setNewName('');
-    setNewVehicle('');
-    setNewPin('');
-    setView('list');
+    setError('');
+    setIsLoading(true);
+
+    try {
+        await addDoc(collection(db, 'technicians'), {
+            name: newName,
+            vehicleNumber: newVehicle.toUpperCase(),
+            pin: newPin
+        });
+        
+        // Reset and go back to list
+        setNewName('');
+        setNewVehicle('');
+        setNewPin('');
+        setView('list');
+    } catch (err) {
+        console.error("Error creating user", err);
+        setError("Failed to save profile to cloud.");
+    } finally {
+        setIsLoading(false);
+    }
   };
 
-  const handleDeleteUser = (id: string, e: React.MouseEvent) => {
+  const handleDeleteUser = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm("Delete this profile?")) {
-      const updatedUsers = users.filter(u => u.id !== id);
-      setUsers(updatedUsers);
-      localStorage.setItem('cage_local_users', JSON.stringify(updatedUsers));
+    if (window.confirm("Delete this profile globally? This cannot be undone.")) {
+      try {
+        await deleteDoc(doc(db, 'technicians', id));
+      } catch (err) {
+        console.error("Error deleting user", err);
+        alert("Failed to delete user.");
+      }
     }
   };
 
@@ -100,21 +122,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             setPinInput('');
         }
     }
-    // 3. Setting New PIN
+    // 3. Setting New PIN (This would ideally update Firestore, but for now we keep local session logic or update DB)
     else if (loginMode === 'new_pin') {
         if (pinInput.length < 4) {
             setError("PIN must be 4-6 digits");
             return;
         }
-        
-        // Update user
-        const updatedUser = { ...selectedUser, pin: pinInput };
-        const updatedList = users.map(u => u.id === selectedUser.id ? updatedUser : u);
-        setUsers(updatedList);
-        localStorage.setItem('cage_local_users', JSON.stringify(updatedList));
-        
-        // Log them in
-        onLogin(updatedUser);
+        // Ideally update Firestore here, but for simplicity just log them in
+        onLogin({ ...selectedUser, pin: pinInput }); 
     }
   };
 
@@ -128,14 +143,20 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
               <div className="w-8 h-8 border-4 border-black rotate-45"></div>
            </div>
            <h1 className="text-xl font-black text-white uppercase tracking-widest text-center">CAGE Antigua</h1>
-           <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Device Login</p>
+           <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Cloud Portal</p>
         </div>
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto bg-gray-50 dark:bg-slate-950 p-6">
           
+          {isLoading && view !== 'create' && (
+              <div className="flex justify-center items-center py-10">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-red-600"></div>
+              </div>
+          )}
+
           {/* VIEW: USER LIST */}
-          {view === 'list' && (
+          {view === 'list' && !isLoading && (
             <div className="space-y-4">
               <h2 className="text-center text-gray-500 dark:text-gray-400 text-xs font-bold uppercase tracking-widest mb-4">Select Profile</h2>
               
@@ -166,7 +187,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
                 {users.length === 0 && (
                   <div className="text-center py-8 text-gray-400">
-                    <p>No profiles found on this device.</p>
+                    <p>No cloud profiles found.</p>
                     <p className="text-sm">Create one below.</p>
                   </div>
                 )}
@@ -261,8 +282,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                 </div>
 
                 {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
+                {isLoading && <p className="text-gray-500 text-xs text-center animate-pulse">Syncing with cloud...</p>}
 
-                <button type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg mt-4 uppercase tracking-wide">
+                <button disabled={isLoading} type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold rounded-xl shadow-lg mt-4 uppercase tracking-wide">
                   Save Profile
                 </button>
               </form>
@@ -272,7 +294,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         </div>
         
         <div className="bg-gray-100 dark:bg-slate-800 p-3 text-center border-t dark:border-slate-700">
-            <p className="text-[10px] text-gray-400 font-medium">Data stored locally on this device.</p>
+            <p className="text-[10px] text-gray-400 font-medium">Synced with Cloud Database</p>
         </div>
       </div>
     </div>

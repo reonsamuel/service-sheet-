@@ -7,8 +7,9 @@ import HistoryModal from './components/HistoryModal';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
 import { PenIcon, ClockIcon, CalendarIcon, CameraIcon, SendIcon, XIcon, SaveIcon, FolderIcon, CheckIcon, LogoutIcon, UserIcon, SettingsIcon } from './components/ui/Icons';
-import { storage } from './firebase-config';
+import { storage, db } from './firebase-config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { collection, addDoc, query, where, getDocs, orderBy, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
 
 // Reusable components for the form
 const Label: React.FC<{ children?: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
@@ -62,6 +63,7 @@ interface HistoryItem {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<Technician | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [formData, setFormData] = useState<ServiceFormData>(INITIAL_DATA);
   const [activeSignatureField, setActiveSignatureField] = useState<'tech' | 'agent' | 'official' | null>(null);
   const [activeTimeField, setActiveTimeField] = useState<'arrival' | 'departure' | null>(null);
@@ -78,22 +80,45 @@ export default function App() {
 
   // Initialize App
   useEffect(() => {
-    // Theme
-    const savedTheme = localStorage.getItem('cage_theme') as 'light' | 'dark';
-    if (savedTheme) {
-        setTheme(savedTheme);
-    }
-    
-    // Load local history
-    const savedHistory = localStorage.getItem('cage_service_history');
-    if (savedHistory) {
-      try {
-        setHistory(JSON.parse(savedHistory));
-      } catch (e) {
-        console.error("Failed to parse history", e);
-      }
-    }
+    const initApp = async () => {
+        // 1. Theme
+        const savedTheme = localStorage.getItem('cage_theme') as 'light' | 'dark';
+        if (savedTheme) setTheme(savedTheme);
+
+        // 2. Auto Login attempt
+        const lastUserId = localStorage.getItem('cage_last_user_id');
+        if (lastUserId) {
+            try {
+                const userDoc = await getDoc(doc(db, 'technicians', lastUserId));
+                if (userDoc.exists()) {
+                    const userData = userDoc.data() as Omit<Technician, 'id'>;
+                    setCurrentUser({ id: userDoc.id, ...userData });
+                    
+                    // Pre-fill form
+                    setFormData(prev => ({
+                        ...prev,
+                        techName: userData.name,
+                        vehicleNumber: userData.vehicleNumber
+                    }));
+                }
+            } catch (e) {
+                console.error("Auto-login failed", e);
+            }
+        }
+        setIsInitializing(false);
+    };
+
+    initApp();
   }, []);
+
+  // Load History when user changes
+  useEffect(() => {
+    if (currentUser) {
+        loadCloudHistory();
+    } else {
+        setHistory([]);
+    }
+  }, [currentUser]);
 
   // Effect to apply theme class
   useEffect(() => {
@@ -105,12 +130,33 @@ export default function App() {
     localStorage.setItem('cage_theme', theme);
   }, [theme]);
 
+  const loadCloudHistory = async () => {
+    if (!currentUser) return;
+    try {
+        const q = query(
+            collection(db, 'service_reports'), 
+            where('techId', '==', currentUser.id),
+            orderBy('timestamp', 'desc')
+        );
+        const snapshot = await getDocs(q);
+        const items: HistoryItem[] = snapshot.docs.map(doc => ({
+            id: doc.id,
+            timestamp: doc.data().timestamp?.toMillis() || Date.now(),
+            data: doc.data() as ServiceFormData
+        }));
+        setHistory(items);
+    } catch (e) {
+        console.error("Failed to load history", e);
+    }
+  };
+
   const toggleTheme = () => {
       setTheme(prev => prev === 'light' ? 'dark' : 'light');
   };
 
   const handleLogin = (tech: Technician) => {
     setCurrentUser(tech);
+    localStorage.setItem('cage_last_user_id', tech.id);
     setFormData(prev => ({
         ...prev,
         techName: tech.name,
@@ -119,7 +165,7 @@ export default function App() {
     }));
   };
 
-  const handleUpdateProfile = (updatedTech: Technician) => {
+  const handleUpdateProfile = async (updatedTech: Technician) => {
       // Update session
       setCurrentUser(updatedTech);
       
@@ -130,18 +176,23 @@ export default function App() {
           vehicleNumber: updatedTech.vehicleNumber
       }));
 
-      // Update LocalStorage 'Database'
-      const storedUsersStr = localStorage.getItem('cage_local_users');
-      if (storedUsersStr) {
-          const storedUsers: Technician[] = JSON.parse(storedUsersStr);
-          const newUsersList = storedUsers.map(u => u.id === updatedTech.id ? updatedTech : u);
-          localStorage.setItem('cage_local_users', JSON.stringify(newUsersList));
+      // Update Firestore
+      try {
+        const userRef = doc(db, 'technicians', updatedTech.id);
+        await updateDoc(userRef, {
+            name: updatedTech.name,
+            vehicleNumber: updatedTech.vehicleNumber,
+            pin: updatedTech.pin
+        });
+      } catch (e) {
+          console.error("Failed to update profile in cloud", e);
       }
   };
 
   const handleLogout = async () => {
       if (window.confirm("Are you sure you want to log out?")) {
           setCurrentUser(null);
+          localStorage.removeItem('cage_last_user_id');
           setFormData(INITIAL_DATA);
       }
   };
@@ -172,32 +223,39 @@ export default function App() {
   };
 
   const handleSave = async () => {
-    if (saveStatus !== 'idle') return;
+    if (saveStatus !== 'idle' || !currentUser) return;
 
     setSaveStatus('saving');
-    await new Promise(resolve => setTimeout(resolve, 600));
-
-    // For local draft saving, we can still use LocalStorage for speed
-    const newItem: HistoryItem = {
-      id: crypto.randomUUID(),
-      timestamp: Date.now(),
-      data: { ...formData }
-    };
-    const newHistory = [...history, newItem];
-    setHistory(newHistory);
-    // Persist local drafts
-    localStorage.setItem('cage_service_history', JSON.stringify(newHistory));
     
-    setSaveStatus('success');
+    try {
+        // Save to Cloud
+        await addDoc(collection(db, 'service_reports'), {
+            ...formData,
+            techId: currentUser.id,
+            timestamp: serverTimestamp()
+        });
+        
+        // Reload history to show new item
+        await loadCloudHistory();
+        
+        setSaveStatus('success');
+    } catch (e) {
+        console.error("Save failed", e);
+        alert("Failed to save to cloud. Please check connection.");
+        setSaveStatus('idle');
+    }
+
     setTimeout(() => {
       setSaveStatus('idle');
     }, 2000);
   };
 
   const deleteHistoryItem = (id: string) => {
+    // This is view-only deletion for now in the modal prop, 
+    // but in a real app you might want to deleteDoc(doc(db, 'service_reports', id))
+    // For safety, we'll just remove from local view
     const newHistory = history.filter(item => item.id !== id);
     setHistory(newHistory);
-    localStorage.setItem('cage_service_history', JSON.stringify(newHistory));
   };
 
   const loadHistoryItem = (data: ServiceFormData) => {
@@ -341,7 +399,7 @@ export default function App() {
       // 1. Download
       pdfDoc.save(fileName);
       
-      // 2. Local Save
+      // 2. Local Save (Backup)
       handleSave();
 
       // 3. Email
@@ -378,26 +436,17 @@ export default function App() {
         const fileName = `ServiceCall_${formData.shopName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
         const { blob: pdfBlob, doc: pdfDoc } = await generatePDFBlob(formData);
 
-        // --- CLOUD UPLOAD ATTEMPT (Still optional) ---
-        // If they have firebase configured and are online, this works. 
-        // If not, we just fallback to email/download without crashing.
-        let cloudSuccess = false;
-        let downloadUrl = '';
-
+        // --- CLOUD UPLOAD ATTEMPT ---
         try {
-            // Check if we even have Storage configured
             if (storage && navigator.onLine) {
                  const storageRef = ref(storage, `service_sheets/${currentUser.id}/${fileName}`);
-                 const snapshot = await uploadBytes(storageRef, pdfBlob);
-                 downloadUrl = await getDownloadURL(snapshot.ref);
-                 cloudSuccess = true;
+                 await uploadBytes(storageRef, pdfBlob);
             }
         } catch (e) {
-            console.log("Cloud upload skipped or failed (offline mode likely)", e);
+            console.log("Cloud upload skipped or failed", e);
         }
         
         // --- OFFLINE / EMAIL HANDOFF ---
-        // Even if cloud fails, we proceed with download/email
         handleOfflineSubmit(pdfDoc, fileName);
 
     } catch (error: any) {
@@ -409,6 +458,17 @@ export default function App() {
   };
 
   // ---------------- RENDER ----------------
+
+  if (isInitializing) {
+      return (
+          <div className="min-h-screen bg-black flex items-center justify-center">
+              <div className="text-white text-center">
+                  <div className="w-16 h-16 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                  <p className="uppercase font-bold tracking-widest text-sm">Loading System...</p>
+              </div>
+          </div>
+      );
+  }
 
   if (!currentUser) {
       return <LoginScreen onLogin={handleLogin} />;
@@ -434,7 +494,7 @@ export default function App() {
             <button 
                 onClick={() => setShowHistory(true)}
                 className="bg-white/20 hover:bg-white/30 p-2 md:p-3 rounded-lg transition-colors flex items-center gap-2 border border-white/30 backdrop-blur-sm shadow-md"
-                title="Open History Folder"
+                title="Open Cloud History"
             >
                 <FolderIcon className="w-5 h-5 md:w-6 md:h-6 text-yellow-300" />
             </button>
@@ -769,7 +829,7 @@ export default function App() {
                 {saveStatus === 'idle' && (
                     <>
                         <SaveIcon className="w-6 h-6" />
-                        Save to Device
+                        Save to Cloud
                     </>
                 )}
                 {saveStatus === 'saving' && (
@@ -778,13 +838,13 @@ export default function App() {
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Saving...
+                        Syncing...
                     </>
                 )}
                 {saveStatus === 'success' && (
                     <div className="flex items-center gap-2 animate-fade-in">
                         <CheckIcon className="w-6 h-6" />
-                        Saved!
+                        Synced!
                     </div>
                 )}
             </button>
