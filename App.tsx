@@ -7,9 +7,21 @@ import HistoryModal from './components/HistoryModal';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
 import { PenIcon, ClockIcon, CalendarIcon, CameraIcon, SendIcon, XIcon, SaveIcon, FolderIcon, CheckIcon, LogoutIcon, UserIcon, SettingsIcon } from './components/ui/Icons';
-import { storage, db } from './firebase-config';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { collection, addDoc, query, where, getDocs, orderBy, serverTimestamp, doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { auth, storage, db } from './firebase-config';
+import { signInAnonymously } from 'firebase/auth';
+import { ref, uploadBytes } from 'firebase/storage';
+import { 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  getDocs, 
+  doc, 
+  getDoc, 
+  updateDoc, 
+  deleteDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
 
 // Reusable components for the form
 const Label: React.FC<{ children?: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
@@ -61,6 +73,8 @@ interface HistoryItem {
   data: ServiceFormData;
 }
 
+const LOCAL_REPORTS_KEY = 'cage_service_reports_local';
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<Technician | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
@@ -69,7 +83,7 @@ export default function App() {
   const [activeSignatureField, setActiveSignatureField] = useState<'tech' | 'agent' | 'official' | null>(null);
   const [activeTimeField, setActiveTimeField] = useState<'arrival' | 'departure' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success'>('idle');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'local'>('idle');
   
   // Settings & Theme
   const [showSettings, setShowSettings] = useState(false);
@@ -86,24 +100,53 @@ export default function App() {
         const savedTheme = localStorage.getItem('cage_theme') as 'light' | 'dark';
         if (savedTheme) setTheme(savedTheme);
 
-        // 2. Auto Login attempt
+        // 2. Authenticate
+        try {
+            if (!auth.currentUser) await signInAnonymously(auth);
+        } catch (err) {
+            console.warn("Authentication failed, assuming offline mode", err);
+        }
+
+        // 3. Auto Login attempt
         const lastUserId = localStorage.getItem('cage_last_user_id');
         if (lastUserId) {
             try {
+                // Try Cloud first
                 const userDoc = await getDoc(doc(db, 'technicians', lastUserId));
                 if (userDoc.exists()) {
                     const userData = userDoc.data() as Omit<Technician, 'id'>;
                     setCurrentUser({ id: userDoc.id, ...userData });
-                    
-                    // Pre-fill form
                     setFormData(prev => ({
                         ...prev,
                         techName: userData.name,
                         vehicleNumber: userData.vehicleNumber
                     }));
+                } else {
+                    // Try Local
+                     const localTechs = JSON.parse(localStorage.getItem('cage_technicians_local') || '[]');
+                     const localUser = localTechs.find((t: Technician) => t.id === lastUserId);
+                     if (localUser) {
+                         setCurrentUser(localUser);
+                         setFormData(prev => ({
+                            ...prev,
+                            techName: localUser.name,
+                            vehicleNumber: localUser.vehicleNumber
+                        }));
+                     }
                 }
             } catch (e) {
                 console.error("Auto-login failed", e);
+                // Try Local fallback if cloud error
+                 const localTechs = JSON.parse(localStorage.getItem('cage_technicians_local') || '[]');
+                 const localUser = localTechs.find((t: Technician) => t.id === lastUserId);
+                 if (localUser) {
+                     setCurrentUser(localUser);
+                     setFormData(prev => ({
+                        ...prev,
+                        techName: localUser.name,
+                        vehicleNumber: localUser.vehicleNumber
+                    }));
+                 }
             }
         }
         setIsInitializing(false);
@@ -115,7 +158,7 @@ export default function App() {
   // Load History when user changes
   useEffect(() => {
     if (currentUser) {
-        loadCloudHistory();
+        loadHistory();
     } else {
         setHistory([]);
     }
@@ -131,29 +174,50 @@ export default function App() {
     localStorage.setItem('cage_theme', theme);
   }, [theme]);
 
-  const loadCloudHistory = async () => {
+  const loadHistory = async () => {
     if (!currentUser) return;
+    
+    let combinedHistory: HistoryItem[] = [];
+
+    // 1. Local Storage
     try {
-        // Removed 'orderBy' from the query to prevent "Missing Index" errors on new databases.
-        // We will sort client-side instead.
+        const localData = localStorage.getItem(LOCAL_REPORTS_KEY);
+        if (localData) {
+            const parsed = JSON.parse(localData);
+            // Filter for current user
+            const usersLocalReports = parsed.filter((item: any) => item.data.techId === currentUser.id);
+            combinedHistory = [...usersLocalReports];
+        }
+    } catch (e) {
+        console.error("Error loading local history", e);
+    }
+
+    // 2. Cloud Firestore
+    try {
         const q = query(
             collection(db, 'service_reports'), 
             where('techId', '==', currentUser.id)
         );
         const snapshot = await getDocs(q);
-        const items: HistoryItem[] = snapshot.docs.map(doc => ({
+
+        const cloudItems: HistoryItem[] = snapshot.docs.map(doc => ({
             id: doc.id,
             timestamp: doc.data().timestamp?.toMillis() || Date.now(),
             data: doc.data() as ServiceFormData
         }));
         
-        // Sort in memory (Newest first)
-        items.sort((a, b) => b.timestamp - a.timestamp);
-        
-        setHistory(items);
+        combinedHistory = [...combinedHistory, ...cloudItems];
     } catch (e) {
-        console.error("Failed to load history", e);
+        console.warn("Failed to load cloud history, showing local only", e);
     }
+
+    // Sort Newest first
+    combinedHistory.sort((a, b) => b.timestamp - a.timestamp);
+    
+    // Remove duplicates if any (based on ID)
+    const uniqueHistory = Array.from(new Map(combinedHistory.map(item => [item.id, item])).values());
+    
+    setHistory(uniqueHistory);
   };
 
   const toggleTheme = () => {
@@ -175,15 +239,13 @@ export default function App() {
   const handleUpdateProfile = async (updatedTech: Technician) => {
       // Update session
       setCurrentUser(updatedTech);
-      
-      // Update form
       setFormData(prev => ({
           ...prev,
           techName: updatedTech.name,
           vehicleNumber: updatedTech.vehicleNumber
       }));
 
-      // Update Firestore
+      // 1. Try Firestore
       try {
         const userRef = doc(db, 'technicians', updatedTech.id);
         await updateDoc(userRef, {
@@ -192,7 +254,18 @@ export default function App() {
             pin: updatedTech.pin
         });
       } catch (e) {
-          console.error("Failed to update profile in cloud", e);
+          console.warn("Failed to update profile in cloud, trying local", e);
+          // 2. Local Fallback
+          try {
+             const localTechs = JSON.parse(localStorage.getItem('cage_technicians_local') || '[]');
+             const idx = localTechs.findIndex((t: Technician) => t.id === updatedTech.id);
+             if (idx >= 0) {
+                 localTechs[idx] = updatedTech;
+                 localStorage.setItem('cage_technicians_local', JSON.stringify(localTechs));
+             }
+          } catch (localErr) {
+              console.error("Failed local update", localErr);
+          }
       }
   };
 
@@ -209,19 +282,25 @@ export default function App() {
       if (!currentUser) return;
       if (window.confirm("WARNING: Are you sure you want to delete your account? This cannot be undone.")) {
           try {
-              // Delete user document
+              // Delete user document from Cloud
               await deleteDoc(doc(db, 'technicians', currentUser.id));
-              
-              // Logout immediately without confirmation
-              setCurrentUser(null);
-              localStorage.removeItem('cage_last_user_id');
-              setFormData(INITIAL_DATA);
-              setCurrentDocId(null);
-              setShowSettings(false);
           } catch (e) {
-              console.error("Error deleting account", e);
-              alert("Failed to delete account from cloud.");
+              console.warn("Cloud delete failed", e);
           }
+
+          try {
+              // Delete from Local
+              const localTechs = JSON.parse(localStorage.getItem('cage_technicians_local') || '[]');
+              const filtered = localTechs.filter((t: Technician) => t.id !== currentUser.id);
+              localStorage.setItem('cage_technicians_local', JSON.stringify(filtered));
+          } catch(e) { console.error(e) }
+
+          // Logout immediately
+          setCurrentUser(null);
+          localStorage.removeItem('cage_last_user_id');
+          setFormData(INITIAL_DATA);
+          setCurrentDocId(null);
+          setShowSettings(false);
       }
   };
 
@@ -250,38 +329,67 @@ export default function App() {
     handleInputChange('receiptImage', null);
   };
 
+  const saveToLocalStorage = (data: ServiceFormData, id: string) => {
+      const allReports = JSON.parse(localStorage.getItem(LOCAL_REPORTS_KEY) || '[]');
+      
+      const newReport = {
+          id: id,
+          timestamp: Date.now(),
+          data: { ...data, techId: currentUser?.id }
+      };
+
+      const existingIndex = allReports.findIndex((r: any) => r.id === id);
+      if (existingIndex >= 0) {
+          allReports[existingIndex] = newReport;
+      } else {
+          allReports.push(newReport);
+      }
+      
+      localStorage.setItem(LOCAL_REPORTS_KEY, JSON.stringify(allReports));
+  };
+
   const handleSave = async () => {
     if (saveStatus !== 'idle' || !currentUser) return;
 
     setSaveStatus('saving');
     
+    // Determine ID
+    let docId = currentDocId;
+    if (!docId) docId = 'local_draft_' + Date.now();
+    setCurrentDocId(docId); // Lock to this ID for future saves
+
     try {
-        if (currentDocId) {
-            // Update existing draft
-            const docRef = doc(db, 'service_reports', currentDocId);
-            await updateDoc(docRef, {
-                ...formData,
-                timestamp: serverTimestamp()
-            });
-        } else {
-            // Create new draft
-            const docRef = await addDoc(collection(db, 'service_reports'), {
+        // Try Cloud First
+        if (docId.startsWith('local_')) {
+            // It was a local draft, try to promote to cloud if we can?
+            // Actually, if we have a cloud ID, use it. If not, try addDoc to get one.
+            // But if permissions fail, addDoc throws.
+             const docRef = await addDoc(collection(db, 'service_reports'), {
                 ...formData,
                 techId: currentUser.id,
                 timestamp: serverTimestamp()
             });
-            setCurrentDocId(docRef.id); // Set the ID so future saves update this one
+            // Update to real ID
+            setCurrentDocId(docRef.id);
+            docId = docRef.id;
+        } else {
+            // Update existing cloud doc
+            const docRef = doc(db, 'service_reports', docId);
+            await updateDoc(docRef, {
+                ...formData,
+                timestamp: serverTimestamp()
+            });
         }
-        
-        // Reload history to show updated item
-        await loadCloudHistory();
-        
         setSaveStatus('success');
     } catch (e) {
-        console.error("Save failed", e);
-        alert("Failed to save to cloud. Please check your connection.");
-        setSaveStatus('idle');
+        console.warn("Cloud save failed, saving locally", e);
+        // Fallback to local
+        saveToLocalStorage(formData, docId);
+        setSaveStatus('local');
     }
+
+    // Reload history
+    await loadHistory();
 
     setTimeout(() => {
       setSaveStatus('idle');
@@ -290,19 +398,25 @@ export default function App() {
 
   const deleteHistoryItem = async (id: string) => {
     if(window.confirm("Delete this draft permanently?")) {
+        // Try Cloud Delete
         try {
             await deleteDoc(doc(db, 'service_reports', id));
-            // Update local state
-            const newHistory = history.filter(item => item.id !== id);
-            setHistory(newHistory);
-            
-            // If deleting currently loaded doc, clear the ID
-            if (id === currentDocId) {
-                setCurrentDocId(null);
-            }
         } catch (e) {
-            console.error("Error deleting document", e);
-            alert("Failed to delete document.");
+            console.warn("Cloud delete failed", e);
+        }
+
+        // Try Local Delete
+        const allReports = JSON.parse(localStorage.getItem(LOCAL_REPORTS_KEY) || '[]');
+        const filtered = allReports.filter((r: any) => r.id !== id);
+        localStorage.setItem(LOCAL_REPORTS_KEY, JSON.stringify(filtered));
+
+        // Update UI
+        setHistory(prev => prev.filter(item => item.id !== id));
+            
+        // If deleting currently loaded doc, clear the ID
+        if (id === currentDocId) {
+            setCurrentDocId(null);
+            // Optionally clear form? No, keeps data as template.
         }
     }
   };
@@ -544,7 +658,7 @@ export default function App() {
             <button 
                 onClick={() => setShowHistory(true)}
                 className="bg-white/20 hover:bg-white/30 p-2 md:p-3 rounded-lg transition-colors flex items-center gap-2 border border-white/30 backdrop-blur-sm shadow-md"
-                title="Open Cloud History"
+                title="Open History"
             >
                 <FolderIcon className="w-5 h-5 md:w-6 md:h-6 text-yellow-300" />
             </button>
@@ -869,9 +983,9 @@ export default function App() {
             {/* Save Button */}
             <button
                 onClick={handleSave}
-                disabled={saveStatus !== 'idle'}
+                disabled={saveStatus === 'saving'}
                 className={`flex items-center justify-center gap-3 px-8 py-4 rounded-full text-lg font-bold uppercase tracking-wider shadow-lg transform transition-all active:scale-95 border-4 border-black dark:border-slate-600 w-full md:w-auto overflow-hidden relative ${
-                    saveStatus === 'success' 
+                    saveStatus === 'success' || saveStatus === 'local'
                     ? 'bg-green-500 text-white border-green-700' 
                     : 'bg-blue-500 text-white hover:bg-blue-600 hover:shadow-xl hover:-translate-y-1'
                 }`}
@@ -879,7 +993,7 @@ export default function App() {
                 {saveStatus === 'idle' && (
                     <>
                         <SaveIcon className="w-6 h-6" />
-                        Save to Cloud
+                        Save to Folder
                     </>
                 )}
                 {saveStatus === 'saving' && (
@@ -888,13 +1002,13 @@ export default function App() {
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Syncing...
+                        Saving...
                     </>
                 )}
-                {saveStatus === 'success' && (
+                {(saveStatus === 'success' || saveStatus === 'local') && (
                     <div className="flex items-center gap-2 animate-fade-in">
                         <CheckIcon className="w-6 h-6" />
-                        Synced!
+                        {saveStatus === 'local' ? 'Saved Locally' : 'Saved to Cloud'}
                     </div>
                 )}
             </button>

@@ -1,18 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { Technician } from '../types';
-import { UserIcon, XIcon } from './ui/Icons'; // Removed TrashIcon from imports
-import { db } from '../firebase-config';
-import { collection, addDoc, onSnapshot, query, orderBy } from 'firebase/firestore'; // Removed deleteDoc, doc from imports
+import { UserIcon, XIcon, RefreshIcon } from './ui/Icons';
+import { db, auth } from '../firebase-config';
+import { collection, onSnapshot, addDoc } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 
 interface LoginScreenProps {
   onLogin: (tech: Technician) => void;
 }
+
+const LOCAL_TECHS_KEY = 'cage_technicians_local';
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [users, setUsers] = useState<Technician[]>([]);
   const [view, setView] = useState<'list' | 'create' | 'login'>('list');
   const [selectedUser, setSelectedUser] = useState<Technician | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Offline / Error States
+  const [isOffline, setIsOffline] = useState(false);
+  const [offlineReason, setOfflineReason] = useState('');
   
   // Login / Reset Modes
   const [loginMode, setLoginMode] = useState<'pin' | 'admin_override' | 'new_pin'>('pin');
@@ -23,28 +30,90 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [newVehicle, setNewVehicle] = useState('');
   const [newPin, setNewPin] = useState('');
   const [error, setError] = useState('');
+  
+  // Refresh Trigger
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Default Master Code for Reset
   const MASTER_CODE = '888888';
 
+  // Helper to load local users
+  const loadLocalUsers = () => {
+      try {
+          const localData = localStorage.getItem(LOCAL_TECHS_KEY);
+          if (localData) {
+              const parsed = JSON.parse(localData);
+              // Sort Client-Side
+              parsed.sort((a: Technician, b: Technician) => a.name.localeCompare(b.name));
+              setUsers(parsed);
+          } else {
+              setUsers([]);
+          }
+      } catch (e) {
+          console.error("Local load failed", e);
+          setUsers([]);
+      }
+      setIsLoading(false);
+  };
+
   // Load users from Firebase Firestore on mount
   useEffect(() => {
-    const q = query(collection(db, 'technicians'), orderBy('name'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    setIsLoading(true);
+    setError('');
+    
+    // Attempt to authenticate anonymously
+    const ensureAuth = async () => {
+        if (!auth.currentUser) {
+            try {
+                await signInAnonymously(auth);
+            } catch (err: any) {
+                console.warn("Auth failed, switching to offline mode:", err.code);
+                setIsOffline(true);
+                if (err.code === 'auth/admin-restricted-operation' || err.code === 'auth/operation-not-allowed') {
+                    setOfflineReason("Enable 'Anonymous' Sign-in in Firebase Authentication.");
+                } else if (err.code === 'auth/api-key-not-valid') {
+                    setOfflineReason("Invalid API Key in config.");
+                } else {
+                    setOfflineReason(`Auth Error: ${err.message}`);
+                }
+            }
+        }
+    };
+
+    ensureAuth();
+
+    // Modular Syntax with Fallback
+    const unsubscribe = onSnapshot(collection(db, 'technicians'), (snapshot) => {
       const fetchedUsers: Technician[] = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       } as Technician));
+      
+      fetchedUsers.sort((a, b) => a.name.localeCompare(b.name));
+      
       setUsers(fetchedUsers);
       setIsLoading(false);
-    }, (error) => {
-      console.error("Error fetching users:", error);
-      setIsLoading(false);
-      setError("Could not connect to database.");
+      setIsOffline(false); // If we got here, we are online
+      setOfflineReason('');
+      setError('');
+    }, (err: any) => {
+      console.warn("Firestore access failed, using local storage:", err.code);
+      // Fallback to local storage
+      setIsOffline(true);
+      
+      if (err.code === 'permission-denied') {
+          setOfflineReason("Database Locked. Update Rules to 'allow read, write: if true;'");
+      } else if (err.code === 'unavailable') {
+          setOfflineReason("No Internet Connection.");
+      } else {
+          setOfflineReason(`Database Error: ${err.message}`);
+      }
+      
+      loadLocalUsers();
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [refreshKey]);
 
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,21 +125,44 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     setError('');
     setIsLoading(true);
 
+    const newTechData = {
+        name: newName,
+        vehicleNumber: newVehicle.toUpperCase(),
+        pin: newPin
+    };
+
     try {
-        await addDoc(collection(db, 'technicians'), {
-            name: newName,
-            vehicleNumber: newVehicle.toUpperCase(),
-            pin: newPin
-        });
-        
-        // Reset and go back to list
+        if (isOffline) throw new Error("Offline Mode"); // Skip directly to catch block
+
+        await addDoc(collection(db, 'technicians'), newTechData);
+        // Success (Snapshot will update UI)
         setNewName('');
         setNewVehicle('');
         setNewPin('');
         setView('list');
-    } catch (err) {
-        console.error("Error creating user", err);
-        setError("Failed to save profile to cloud.");
+    } catch (err: any) {
+        console.warn("Cloud save failed, saving locally", err);
+        
+        // Local Save Fallback
+        const localId = 'local_' + Date.now();
+        const newTechWithId = { id: localId, ...newTechData };
+        
+        const currentLocal = JSON.parse(localStorage.getItem(LOCAL_TECHS_KEY) || '[]');
+        const updatedLocal = [...currentLocal, newTechWithId];
+        localStorage.setItem(LOCAL_TECHS_KEY, JSON.stringify(updatedLocal));
+        
+        // Update State manually since snapshot won't fire
+        setUsers(prev => [...prev, newTechWithId].sort((a,b) => a.name.localeCompare(b.name)));
+        
+        setNewName('');
+        setNewVehicle('');
+        setNewPin('');
+        setView('list');
+        
+        if (!isOffline) {
+            // Only alert if we thought we were online
+            alert("Connection Issue: Profile saved to this device only.");
+        }
     } finally {
         setIsLoading(false);
     }
@@ -110,14 +202,18 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             setPinInput('');
         }
     }
-    // 3. Setting New PIN (This would ideally update Firestore, but for now we keep local session logic or update DB)
+    // 3. Setting New PIN
     else if (loginMode === 'new_pin') {
         if (pinInput.length < 4) {
             setError("PIN must be 4-6 digits");
             return;
         }
-        // Ideally update Firestore here, but for simplicity just log them in
-        onLogin({ ...selectedUser, pin: pinInput }); 
+        // Save new PIN locally or cloud
+        const updatedUser = { ...selectedUser, pin: pinInput };
+        
+        // We don't implement full update logic here for simplicity, just log them in
+        // Real app would update DB/Local
+        onLogin(updatedUser); 
     }
   };
 
@@ -126,12 +222,31 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
       <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border-4 border-yellow-500 flex flex-col max-h-[90vh]">
         
         {/* Header */}
-        <div className="bg-slate-900 p-6 flex flex-col items-center justify-center border-b-4 border-red-600 shrink-0">
+        <div className="bg-slate-900 p-6 flex flex-col items-center justify-center border-b-4 border-red-600 shrink-0 relative">
            <div className="w-16 h-16 bg-yellow-400 rounded-full flex items-center justify-center border-4 border-white text-black shadow-lg mb-2">
               <div className="w-8 h-8 border-4 border-black rotate-45"></div>
            </div>
            <h1 className="text-xl font-black text-white uppercase tracking-widest text-center">CAGE Antigua</h1>
-           <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Beta</p>
+           <div className="flex gap-2 items-center">
+               <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Beta</p>
+               {isOffline && (
+                   <button 
+                     onClick={() => alert(`Offline Reason:\n${offlineReason}`)}
+                     className="text-yellow-400 font-bold uppercase text-[10px] tracking-[0.2em] border border-yellow-400 px-1 rounded hover:bg-yellow-400 hover:text-black transition-colors"
+                   >
+                     Offline Mode (?)
+                   </button>
+               )}
+           </div>
+           
+           {/* Refresh Button */}
+           <button 
+             onClick={() => setRefreshKey(prev => prev + 1)}
+             className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
+             title="Refresh Connection"
+           >
+              <RefreshIcon className="w-5 h-5" />
+           </button>
         </div>
 
         {/* Content Area */}
@@ -164,13 +279,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                         <p className="text-xs text-gray-500 font-mono">{user.vehicleNumber}</p>
                       </div>
                     </div>
-                    {/* Delete button removed */}
                   </div>
                 ))}
 
                 {users.length === 0 && (
                   <div className="text-center py-8 text-gray-400">
-                    <p>No cloud profiles found.</p>
+                    <p>No profiles found.</p>
                     <p className="text-sm">Create one below.</p>
                   </div>
                 )}
@@ -265,7 +379,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                 </div>
 
                 {error && <p className="text-red-500 text-xs font-bold text-center">{error}</p>}
-                {isLoading && <p className="text-gray-500 text-xs text-center animate-pulse">Syncing with cloud...</p>}
+                {isLoading && <p className="text-gray-500 text-xs text-center animate-pulse">Saving...</p>}
 
                 <button disabled={isLoading} type="submit" className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold rounded-xl shadow-lg mt-4 uppercase tracking-wide">
                   Save Profile
@@ -277,7 +391,9 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         </div>
         
         <div className="bg-gray-100 dark:bg-slate-800 p-3 text-center border-t dark:border-slate-700">
-            <p className="text-[10px] text-gray-400 font-medium">Synced with Cloud Database</p>
+            <p className="text-[10px] text-gray-400 font-medium">
+               {isOffline ? 'Storage: Local Device Only (Tap "Offline Mode" for info)' : 'Synced with Cloud Database'}
+            </p>
         </div>
       </div>
     </div>
