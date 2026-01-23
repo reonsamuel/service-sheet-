@@ -1,5 +1,5 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
@@ -14,10 +14,10 @@ const firebaseConfig = {
   measurementId: "G-W73E25BLZ1"
 };
 
-// Initialize Firebase using the namespace to ensure compatibility
-const app = initializeApp(firebaseConfig);
+// Initialize Firebase
+const app = firebase.initializeApp(firebaseConfig);
 
 // Export services
-export const auth = getAuth(app);
+export const auth = firebase.auth();
 export const db = getFirestore(app);
 export const storage = getStorage(app);

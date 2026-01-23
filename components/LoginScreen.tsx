@@ -3,7 +3,6 @@ import { Technician } from '../types';
 import { UserIcon, XIcon, RefreshIcon } from './ui/Icons';
 import { db, auth } from '../firebase-config';
 import { collection, onSnapshot, addDoc } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
 
 interface LoginScreenProps {
   onLogin: (tech: Technician) => void;
@@ -65,7 +64,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     const ensureAuth = async () => {
         if (!auth.currentUser) {
             try {
-                await signInAnonymously(auth);
+                await auth.signInAnonymously();
             } catch (err: any) {
                 console.warn("Auth failed, switching to offline mode:", err.code);
                 setIsOffline(true);
