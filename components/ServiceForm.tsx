@@ -132,7 +132,9 @@ export default function ServiceForm({ currentUser, onBack, onSwitchToPM }: Servi
   // Check for PM Reports when Shop Name changes
   useEffect(() => {
     const checkPM = async () => {
-      // Changed: Now checks for ANY non-empty shop name, not just the hardcoded list
+      // Logic: PMs reset on the 1st of every month.
+      // We check if a PM report exists for this shop where date >= 1st of current month.
+      
       if (!formData.shopName || formData.shopName.trim() === '') {
         setPmStatus(null);
         return;
@@ -140,13 +142,13 @@ export default function ServiceForm({ currentUser, onBack, onSwitchToPM }: Servi
 
       setPmStatus('checking');
 
-      // Calculate start of current month
+      // Calculate start of current month (The "Reset" point)
       const date = new Date();
       const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
       
       try {
-        // NOTE: We only query by agentName to avoid needing a composite index (agentName + timestamp).
-        // Since PM reports per location are not huge in number, filtering client-side is safer and avoids index errors.
+        // NOTE: We query by agentName only to avoid complex composite index requirements.
+        // Filtering by date happens client-side below.
         const q = query(
           collection(db, 'pm_reports'),
           where('agentName', '==', formData.shopName.trim())
@@ -154,7 +156,7 @@ export default function ServiceForm({ currentUser, onBack, onSwitchToPM }: Servi
 
         const snapshot = await getDocs(q);
         
-        // Filter locally for date
+        // Filter locally: Has a PM been done since the 1st of this month?
         const hasRecentPM = snapshot.docs.some(doc => {
             const data = doc.data();
             let docTime = 0;
@@ -578,7 +580,7 @@ export default function ServiceForm({ currentUser, onBack, onSwitchToPM }: Servi
                  <input 
                     type="file" 
                     accept="image/*" 
-                    capture="environment" 
+                    {...({ capture: 'environment' } as any)} // Cast to any to fix build error
                     onChange={handleImageUpload} 
                     ref={cameraInputRef}
                     className="hidden" 
