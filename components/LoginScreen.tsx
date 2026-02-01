@@ -20,9 +20,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   const [isOffline, setIsOffline] = useState(false);
   const [offlineReason, setOfflineReason] = useState('');
   
-  // Login / Reset Modes
-  const [loginMode, setLoginMode] = useState<'pin' | 'admin_override' | 'new_pin'>('pin');
-
   // Form States
   const [pinInput, setPinInput] = useState('');
   const [newName, setNewName] = useState('');
@@ -32,9 +29,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
   
   // Refresh Trigger
   const [refreshKey, setRefreshKey] = useState(0);
-
-  // Default Master Code for Reset
-  const MASTER_CODE = '888888';
 
   // Helper to load local users
   const loadLocalUsers = () => {
@@ -68,13 +62,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
             } catch (err: any) {
                 console.warn("Auth failed, switching to offline mode:", err.code);
                 setIsOffline(true);
-                if (err.code === 'auth/admin-restricted-operation' || err.code === 'auth/operation-not-allowed') {
-                    setOfflineReason("Enable 'Anonymous' Sign-in in Firebase Authentication.");
-                } else if (err.code === 'auth/api-key-not-valid') {
-                    setOfflineReason("Invalid API Key in config.");
-                } else {
-                    setOfflineReason(`Auth Error: ${err.message}`);
-                }
             }
         }
     };
@@ -97,17 +84,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
       setError('');
     }, (err: any) => {
       console.warn("Firestore access failed, using local storage:", err.code);
-      // Fallback to local storage
       setIsOffline(true);
-      
-      if (err.code === 'permission-denied') {
-          setOfflineReason("Database Locked. Update Rules to 'allow read, write: if true;'");
-      } else if (err.code === 'unavailable') {
-          setOfflineReason("No Internet Connection.");
-      } else {
-          setOfflineReason(`Database Error: ${err.message}`);
-      }
-      
       loadLocalUsers();
     });
 
@@ -127,14 +104,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     const newTechData = {
         name: newName,
         vehicleNumber: newVehicle.toUpperCase(),
-        pin: newPin
+        pin: newPin,
+        role: 'user'
     };
 
     try {
-        if (isOffline) throw new Error("Offline Mode"); // Skip directly to catch block
+        if (isOffline) throw new Error("Offline Mode"); 
 
         await addDoc(collection(db, 'technicians'), newTechData);
-        // Success (Snapshot will update UI)
         setNewName('');
         setNewVehicle('');
         setNewPin('');
@@ -150,8 +127,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         const updatedLocal = [...currentLocal, newTechWithId];
         localStorage.setItem(LOCAL_TECHS_KEY, JSON.stringify(updatedLocal));
         
-        // Update State manually since snapshot won't fire
-        setUsers(prev => [...prev, newTechWithId].sort((a,b) => a.name.localeCompare(b.name)));
+        setUsers(prev => [...prev, newTechWithId as any].sort((a,b) => a.name.localeCompare(b.name)));
         
         setNewName('');
         setNewVehicle('');
@@ -159,7 +135,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         setView('list');
         
         if (!isOffline) {
-            // Only alert if we thought we were online
             alert("Connection Issue: Profile saved to this device only.");
         }
     } finally {
@@ -171,7 +146,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
     setSelectedUser(user);
     setPinInput('');
     setError('');
-    setLoginMode('pin');
     setView('login');
   };
 
@@ -181,38 +155,31 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
 
     if (!selectedUser) return;
 
-    // 1. Normal Login
-    if (loginMode === 'pin') {
-        if (pinInput === selectedUser.pin) {
-            onLogin(selectedUser);
-        } else {
-            setError("Incorrect PIN");
-            setPinInput('');
-        }
-    } 
-    // 2. Admin Override Check
-    else if (loginMode === 'admin_override') {
-        if (pinInput === MASTER_CODE) {
-            setLoginMode('new_pin');
-            setPinInput('');
-            setError('');
-        } else {
-            setError("Invalid Manager Code");
-            setPinInput('');
-        }
+    if (pinInput === selectedUser.pin) {
+        onLogin(selectedUser);
+    } else {
+        setError("Incorrect PIN");
+        setPinInput('');
     }
-    // 3. Setting New PIN
-    else if (loginMode === 'new_pin') {
-        if (pinInput.length < 4) {
-            setError("PIN must be 4-6 digits");
-            return;
+  };
+
+  const handleRequestReset = async () => {
+    if (!selectedUser) return;
+    
+    if (confirm(`Send password reset request for ${selectedUser.name} to Admin?`)) {
+        try {
+            await addDoc(collection(db, 'password_requests'), {
+                techId: selectedUser.id,
+                techName: selectedUser.name,
+                vehicleNumber: selectedUser.vehicleNumber,
+                status: 'pending',
+                timestamp: Date.now()
+            });
+            alert("Request sent! Admin has been notified.");
+            setView('list');
+        } catch (e) {
+            alert("Failed to send request. Check connection.");
         }
-        // Save new PIN locally or cloud
-        const updatedUser = { ...selectedUser, pin: pinInput };
-        
-        // We don't implement full update logic here for simplicity, just log them in
-        // Real app would update DB/Local
-        onLogin(updatedUser); 
     }
   };
 
@@ -229,16 +196,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
            <div className="flex gap-2 items-center">
                <p className="text-red-500 font-bold uppercase text-[10px] tracking-[0.2em]">Beta</p>
                {isOffline && (
-                   <button 
-                     onClick={() => alert(`Offline Reason:\n${offlineReason}`)}
-                     className="text-yellow-400 font-bold uppercase text-[10px] tracking-[0.2em] border border-yellow-400 px-1 rounded hover:bg-yellow-400 hover:text-black transition-colors"
-                   >
-                     Offline Mode (?)
-                   </button>
+                   <span className="text-yellow-400 font-bold uppercase text-[10px] tracking-[0.2em] border border-yellow-400 px-1 rounded">
+                     Offline Mode
+                   </span>
                )}
            </div>
            
-           {/* Refresh Button */}
            <button 
              onClick={() => setRefreshKey(prev => prev + 1)}
              className="absolute top-4 right-4 text-gray-500 hover:text-white transition-colors"
@@ -307,10 +270,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                </div>
 
                <form onSubmit={handlePinSubmit} className="w-full max-w-[240px]">
-                  <label className={`block text-center text-xs font-bold uppercase mb-2 ${loginMode === 'admin_override' ? 'text-red-500 animate-pulse' : 'text-gray-400'}`}>
-                      {loginMode === 'pin' && 'Enter PIN'}
-                      {loginMode === 'admin_override' && 'ENTER MANAGER CODE'}
-                      {loginMode === 'new_pin' && 'SET NEW PIN'}
+                  <label className="block text-center text-xs font-bold uppercase mb-2 text-gray-400">
+                      Enter PIN
                   </label>
                   <input
                     type="password"
@@ -318,18 +279,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                     maxLength={6}
                     value={pinInput}
                     onChange={(e) => setPinInput(e.target.value)}
-                    placeholder={loginMode === 'admin_override' ? '••••••' : ''}
-                    className={`w-full text-center text-3xl tracking-[0.5em] py-2 border-b-4 bg-transparent outline-none dark:text-white transition-colors ${
-                        loginMode === 'admin_override' 
-                        ? 'border-red-500 placeholder-red-200' 
-                        : 'border-gray-300 dark:border-slate-700 focus:border-red-600'
-                    }`}
+                    className="w-full text-center text-3xl tracking-[0.5em] py-2 border-b-4 bg-transparent outline-none dark:text-white transition-colors border-gray-300 dark:border-slate-700 focus:border-red-600"
                   />
-                  {/* Master Code Hint for the user */}
-                  {loginMode === 'admin_override' && (
-                     <p className="text-[10px] text-gray-400 text-center mt-1">(Default: {MASTER_CODE})</p>
-                  )}
-                  
                   {error && <p className="text-red-500 text-xs font-bold text-center mt-2">{error}</p>}
                </form>
 
@@ -338,18 +289,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
                   <button onClick={handlePinSubmit} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold shadow-lg">Enter</button>
                </div>
                
-               {loginMode === 'pin' && (
-                   <button 
-                     onClick={() => {
-                         setLoginMode('admin_override');
-                         setPinInput('');
-                         setError('');
-                     }}
-                     className="text-xs text-gray-400 hover:text-red-500 font-bold underline decoration-dotted"
-                   >
-                       Forgot PIN?
-                   </button>
-               )}
+               <button 
+                 onClick={handleRequestReset}
+                 className="text-xs text-gray-400 hover:text-red-500 font-bold underline decoration-dotted mt-4"
+               >
+                   Forgot PIN? Request Reset
+               </button>
             </div>
           )}
 
@@ -391,7 +336,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin }) => {
         
         <div className="bg-gray-100 dark:bg-slate-800 p-3 text-center border-t dark:border-slate-700">
             <p className="text-[10px] text-gray-400 font-medium">
-               {isOffline ? 'Storage: Local Device Only (Tap "Offline Mode" for info)' : 'Synced with Cloud Database'}
+               {isOffline ? 'Storage: Local Device Only' : 'Synced with Cloud Database'}
             </p>
         </div>
       </div>

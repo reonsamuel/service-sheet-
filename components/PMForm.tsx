@@ -5,6 +5,7 @@ import SignaturePad from './SignaturePad';
 import TimePicker from './TimePicker';
 import HistoryModal from './HistoryModal';
 import SignatureManager from './SignatureManager';
+import LocationSelector from './LocationSelector';
 import { PenIcon, ClockIcon, CalendarIcon, SendIcon, SaveIcon, FolderIcon, CheckIcon, UserIcon, ClipboardListIcon } from './ui/Icons';
 import { storage, db } from '../firebase-config';
 import { ref, uploadBytes } from 'firebase/storage';
@@ -54,9 +55,10 @@ const LOCAL_PM_KEY = 'cage_pm_reports_local';
 interface PMFormProps {
     currentUser: Technician;
     onBack: () => void;
+    initialAgentName?: string;
 }
 
-export default function PMForm({ currentUser, onBack }: PMFormProps) {
+export default function PMForm({ currentUser, onBack, initialAgentName }: PMFormProps) {
   const [formData, setFormData] = useState<PMFormData>(INITIAL_PM_DATA);
   const [currentDocId, setCurrentDocId] = useState<string | null>(null);
   const [activeSignatureField, setActiveSignatureField] = useState<'tech' | 'agent' | 'supervisor' | null>(null);
@@ -92,10 +94,11 @@ export default function PMForm({ currentUser, onBack }: PMFormProps) {
   useEffect(() => {
     setFormData(prev => ({
         ...prev,
-        techName: currentUser.name
+        techName: currentUser.name,
+        agentName: initialAgentName || prev.agentName
     }));
     loadHistory();
-  }, [currentUser]);
+  }, [currentUser, initialAgentName]);
 
   const loadHistory = async () => {
     if (!currentUser) return;
@@ -370,7 +373,14 @@ export default function PMForm({ currentUser, onBack }: PMFormProps) {
          <div className="p-6 md:p-10 space-y-8 bg-white dark:bg-slate-900 min-h-screen">
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-blue-50 dark:bg-slate-800 p-6 rounded-xl border-2 border-blue-100 dark:border-slate-700">
-                <div><Label>Agent / Site Name</Label><Input value={formData.agentName} onChange={(e) => handleInputChange('agentName', e.target.value)} placeholder="Enter Agent Name" /></div>
+                <div>
+                  <LocationSelector 
+                    label="Agent / Site Name"
+                    value={formData.agentName}
+                    onChange={(val) => handleInputChange('agentName', val)}
+                    placeholder="Enter Agent Name"
+                  />
+                </div>
                 <div><Label>System</Label><Input value={formData.systemType} onChange={(e) => handleInputChange('systemType', e.target.value)} /></div>
                 <div><Label>Date</Label><div className="relative"><Input type="date" value={formData.date} onChange={(e) => handleInputChange('date', e.target.value)} className="pl-10"/><CalendarIcon className="absolute left-3 top-2.5 w-5 h-5 text-blue-600 pointer-events-none" /></div></div>
                 <div><Label>Arrival</Label><div className="relative" onClick={() => setActiveTimeField('arrival')}><Input value={formData.arrivalTime} readOnly className="pl-10 cursor-pointer"/><ClockIcon className="absolute left-3 top-2.5 w-5 h-5 text-blue-600" /></div></div>

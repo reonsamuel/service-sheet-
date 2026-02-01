@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Technician } from './types';
 import LoginScreen from './components/LoginScreen';
 import SettingsModal from './components/SettingsModal';
+import AdminPanel from './components/AdminPanel';
 import Dashboard from './components/Dashboard';
 import ServiceForm from './components/ServiceForm';
 import PMForm from './components/PMForm';
 import { auth, db } from './firebase-config';
-import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<Technician | null>(null);
@@ -15,9 +16,21 @@ export default function App() {
   // Navigation State
   const [view, setView] = useState<'dashboard' | 'service' | 'pm'>('dashboard');
   
-  // Settings & Theme
+  // State for pre-filling PM form from Service Form
+  const [prefilledPmLocation, setPrefilledPmLocation] = useState<string | undefined>(undefined);
+
+  // Modals
   const [showSettings, setShowSettings] = useState(false);
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
+  
+  // Admin Data
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
+  
+  // Theme
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
+  // Hardcoded Admin Check for Reon Samuel
+  const isAdmin = currentUser?.role === 'admin' || (currentUser?.name === 'Reon Samuel' && currentUser?.vehicleNumber === 'A57769');
 
   // Initialize App
   useEffect(() => {
@@ -61,6 +74,23 @@ export default function App() {
 
     initApp();
   }, []);
+
+  // Listen for Pending Requests (Admin Only)
+  useEffect(() => {
+    if (!currentUser || !isAdmin) {
+        setPendingRequestCount(0);
+        return;
+    }
+
+    const q = query(collection(db, 'password_requests'), where('status', '==', 'pending'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+        setPendingRequestCount(snapshot.size);
+    }, (error) => {
+        console.error("Error listening to requests", error);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, isAdmin]);
 
   // Effect to apply theme class
   useEffect(() => {
@@ -158,11 +188,20 @@ export default function App() {
         
         {view === 'dashboard' && (
             <Dashboard 
-                currentUser={currentUser} 
-                onSelectService={() => setView('service')}
-                onSelectPM={() => setView('pm')}
+                currentUser={currentUser}
+                isAdmin={!!isAdmin} 
+                pendingRequestCount={pendingRequestCount}
+                onSelectService={() => {
+                  setPrefilledPmLocation(undefined);
+                  setView('service');
+                }}
+                onSelectPM={() => {
+                  setPrefilledPmLocation(undefined);
+                  setView('pm');
+                }}
                 onLogout={handleLogout}
                 onOpenSettings={() => setShowSettings(true)}
+                onOpenAdmin={() => setShowAdminPanel(true)}
             />
         )}
 
@@ -170,6 +209,10 @@ export default function App() {
             <ServiceForm 
                 currentUser={currentUser} 
                 onBack={() => setView('dashboard')} 
+                onSwitchToPM={(shopName) => {
+                  setPrefilledPmLocation(shopName);
+                  setView('pm');
+                }}
             />
         )}
 
@@ -177,6 +220,7 @@ export default function App() {
             <PMForm 
                 currentUser={currentUser} 
                 onBack={() => setView('dashboard')} 
+                initialAgentName={prefilledPmLocation}
             />
         )}
 
@@ -190,6 +234,14 @@ export default function App() {
             theme={theme}
             onToggleTheme={toggleTheme}
         />
+      )}
+
+      {currentUser && isAdmin && (
+          <AdminPanel 
+            isOpen={showAdminPanel}
+            onClose={() => setShowAdminPanel(false)}
+            currentUser={currentUser}
+          />
       )}
     </div>
   );

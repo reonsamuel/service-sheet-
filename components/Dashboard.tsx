@@ -1,16 +1,18 @@
 import React from 'react';
 import { Technician } from '../types';
-import { WrenchIcon, ClipboardListIcon, UserIcon, LogoutIcon, SettingsIcon } from './ui/Icons';
+import { WrenchIcon, ClipboardListIcon, UserIcon, LogoutIcon, SettingsIcon, ShieldIcon } from './ui/Icons';
 
 interface DashboardProps {
   currentUser: Technician;
+  isAdmin: boolean;
   onSelectService: () => void;
   onSelectPM: () => void;
   onLogout: () => void;
   onOpenSettings: () => void;
+  onOpenAdmin: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ currentUser, onSelectService, onSelectPM, onLogout, onOpenSettings }) => {
+const Dashboard: React.FC<DashboardProps> = ({ currentUser, isAdmin, onSelectService, onSelectPM, onLogout, onOpenSettings, onOpenAdmin }) => {
   return (
     <div className="min-h-screen bg-orange-50 dark:bg-slate-950 p-4 md:p-8 flex flex-col items-center">
       {/* Header Bar */}
@@ -26,6 +28,16 @@ const Dashboard: React.FC<DashboardProps> = ({ currentUser, onSelectService, onS
         </div>
         
         <div className="flex gap-2">
+           {isAdmin && (
+              <button 
+                type="button"
+                onClick={onOpenAdmin}
+                className="p-3 bg-slate-800 text-yellow-500 rounded-xl shadow-lg border border-yellow-600 hover:bg-yellow-500 hover:text-black transition-all group animate-fade-in"
+                title="Admin Panel"
+              >
+                <ShieldIcon className="w-6 h-6" />
+              </button>
+           )}
            <button 
               type="button"
               onClick={onOpenSettings}

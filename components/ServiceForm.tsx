@@ -5,7 +5,8 @@ import SignaturePad from './SignaturePad';
 import TimePicker from './TimePicker';
 import HistoryModal from './HistoryModal';
 import SignatureManager from './SignatureManager';
-import { PenIcon, ClockIcon, CalendarIcon, CameraIcon, SendIcon, XIcon, SaveIcon, FolderIcon, CheckIcon, UserIcon } from './ui/Icons';
+import LocationSelector from './LocationSelector';
+import { PenIcon, ClockIcon, CalendarIcon, CameraIcon, SendIcon, XIcon, SaveIcon, FolderIcon, CheckIcon, UserIcon, ClipboardListIcon, ImageIcon } from './ui/Icons';
 import { storage, db } from '../firebase-config';
 import { ref, uploadBytes } from 'firebase/storage';
 import { 
@@ -75,9 +76,10 @@ const LOCAL_REPORTS_KEY = 'cage_service_reports_local';
 interface ServiceFormProps {
     currentUser: Technician;
     onBack: () => void;
+    onSwitchToPM?: (shopName: string) => void;
 }
 
-export default function ServiceForm({ currentUser, onBack }: ServiceFormProps) {
+export default function ServiceForm({ currentUser, onBack, onSwitchToPM }: ServiceFormProps) {
   const [formData, setFormData] = useState<ServiceFormData>(INITIAL_DATA);
   const [currentDocId, setCurrentDocId] = useState<string | null>(null);
   const [activeSignatureField, setActiveSignatureField] = useState<'tech' | 'agent' | 'official' | null>(null);
@@ -87,6 +89,13 @@ export default function ServiceForm({ currentUser, onBack }: ServiceFormProps) {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showSigManager, setShowSigManager] = useState(false);
+  
+  // Refs for Image Upload
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+  
+  // PM Reminder State
+  const [pmStatus, setPmStatus] = useState<'checking' | 'found' | 'missing' | null>(null);
   
   // Secret Tap Logic
   const secretTapRef = useRef({ count: 0, lastTap: 0 });
@@ -119,6 +128,63 @@ export default function ServiceForm({ currentUser, onBack }: ServiceFormProps) {
     }));
     loadHistory();
   }, [currentUser]);
+
+  // Check for PM Reports when Shop Name changes
+  useEffect(() => {
+    const checkPM = async () => {
+      // Changed: Now checks for ANY non-empty shop name, not just the hardcoded list
+      if (!formData.shopName || formData.shopName.trim() === '') {
+        setPmStatus(null);
+        return;
+      }
+
+      setPmStatus('checking');
+
+      // Calculate start of current month
+      const date = new Date();
+      const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
+      
+      try {
+        // NOTE: We only query by agentName to avoid needing a composite index (agentName + timestamp).
+        // Since PM reports per location are not huge in number, filtering client-side is safer and avoids index errors.
+        const q = query(
+          collection(db, 'pm_reports'),
+          where('agentName', '==', formData.shopName.trim())
+        );
+
+        const snapshot = await getDocs(q);
+        
+        // Filter locally for date
+        const hasRecentPM = snapshot.docs.some(doc => {
+            const data = doc.data();
+            let docTime = 0;
+            
+            // Handle Firestore Timestamp
+            if (data.timestamp && typeof data.timestamp.toMillis === 'function') {
+                docTime = data.timestamp.toMillis();
+            } 
+            // Handle Number/String fallback
+            else if (data.timestamp) {
+                docTime = new Date(data.timestamp).getTime();
+            }
+            
+            return docTime >= firstDay.getTime();
+        });
+
+        if (hasRecentPM) {
+          setPmStatus('found');
+        } else {
+          setPmStatus('missing');
+        }
+      } catch (e) {
+        console.warn("Could not check PM status", e);
+        setPmStatus(null);
+      }
+    };
+
+    const timeoutId = setTimeout(checkPM, 1000); // Debounce check
+    return () => clearTimeout(timeoutId);
+  }, [formData.shopName]);
 
   const loadHistory = async () => {
     if (!currentUser) return;
@@ -468,6 +534,25 @@ export default function ServiceForm({ currentUser, onBack }: ServiceFormProps) {
           <h2 className="text-2xl md:text-3xl font-extrabold tracking-wide uppercase border-b-4 border-yellow-400 pb-1 text-white text-center md:text-right w-full md:w-auto mt-4 md:mt-0">Service Call Sheet</h2>
         </div>
 
+        {/* PM Reminder Banner */}
+        {pmStatus === 'missing' && onSwitchToPM && (
+          <div className="bg-orange-500 text-white p-4 animate-slide-up flex flex-col md:flex-row items-center justify-between gap-4 shadow-md">
+            <div className="flex items-center gap-3">
+              <ClipboardListIcon className="w-6 h-6 text-white" />
+              <div>
+                <p className="font-bold text-sm uppercase tracking-wide">Reminder: No PM Check Recorded</p>
+                <p className="text-xs text-orange-100">No Preventive Maintenance done for {formData.shopName} this month.</p>
+              </div>
+            </div>
+            <button 
+              onClick={() => onSwitchToPM(formData.shopName)}
+              className="bg-white text-orange-600 px-4 py-2 rounded-lg font-bold text-xs uppercase shadow-sm hover:bg-orange-50"
+            >
+              Start PM Now &rarr;
+            </button>
+          </div>
+        )}
+
         {/* Form Content */}
         <div className="p-6 md:p-10 space-y-8 bg-white dark:bg-slate-900 min-h-screen">
           
@@ -488,22 +573,65 @@ export default function ServiceForm({ currentUser, onBack }: ServiceFormProps) {
 
               <div className="w-full md:w-64 flex-shrink-0">
                  <Label className="mb-2 text-right md:text-left">Receipt / Proof</Label>
+                 
+                 {/* Hidden Inputs for different capture methods */}
+                 <input 
+                    type="file" 
+                    accept="image/*" 
+                    capture="environment" 
+                    onChange={handleImageUpload} 
+                    ref={cameraInputRef}
+                    className="hidden" 
+                 />
+                 <input 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={handleImageUpload} 
+                    ref={galleryInputRef}
+                    className="hidden" 
+                 />
+
                  <div className="relative w-full h-40 border-2 border-dashed border-gray-400 dark:border-gray-500 rounded-lg hover:border-red-500 bg-gray-50 dark:bg-slate-800 overflow-hidden group">
-                    <input type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                     {formData.receiptImage ? (
                         <div className="w-full h-full relative">
                             <img src={formData.receiptImage} alt="Receipt" className="w-full h-full object-cover" />
                             <button onClick={removeImage} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 shadow-md hover:bg-red-700 z-20"><XIcon className="w-4 h-4" /></button>
                         </div>
                     ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 group-hover:text-red-500"><CameraIcon className="w-10 h-10 mb-2" /><span className="text-xs font-bold uppercase">Tap to capture</span></div>
+                        <div className="w-full h-full flex flex-col items-center justify-center gap-3">
+                            <div className="flex gap-4">
+                                <button 
+                                    onClick={() => cameraInputRef.current?.click()}
+                                    className="flex flex-col items-center justify-center p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors text-gray-500 dark:text-gray-400 hover:text-red-500"
+                                >
+                                    <CameraIcon className="w-8 h-8 mb-1" />
+                                    <span className="text-[10px] font-bold uppercase">Camera</span>
+                                </button>
+                                <div className="w-px bg-gray-300 dark:bg-slate-600 h-10 self-center"></div>
+                                <button 
+                                    onClick={() => galleryInputRef.current?.click()}
+                                    className="flex flex-col items-center justify-center p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-slate-700 transition-colors text-gray-500 dark:text-gray-400 hover:text-blue-500"
+                                >
+                                    <ImageIcon className="w-8 h-8 mb-1" />
+                                    <span className="text-[10px] font-bold uppercase">Gallery</span>
+                                </button>
+                            </div>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Add Photo</span>
+                        </div>
                     )}
                  </div>
               </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div><Label>Shop Name</Label><Input value={formData.shopName} onChange={(e) => handleInputChange('shopName', e.target.value)} placeholder="Enter shop name" /></div>
+            <div>
+              <LocationSelector 
+                label="Shop Name"
+                value={formData.shopName}
+                onChange={(val) => handleInputChange('shopName', val)}
+                placeholder="Enter shop name..."
+              />
+            </div>
             <div><Label>System Type</Label><Input value={formData.systemType} onChange={(e) => handleInputChange('systemType', e.target.value)} placeholder="Enter system type" /></div>
             <div><Label>Terminal #</Label><Input value={formData.terminalNumber} onChange={(e) => handleInputChange('terminalNumber', e.target.value)} placeholder="Ex. 12345" /></div>
             <div><Label>Date</Label><div className="relative"><Input type="date" value={formData.date} onChange={(e) => handleInputChange('date', e.target.value)} className="pl-10" /><CalendarIcon className="absolute left-3 top-2.5 w-5 h-5 text-red-600 pointer-events-none" /></div></div>

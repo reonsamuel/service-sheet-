@@ -2,11 +2,42 @@
 export type CallType = 'New Service Call' | 'Repeat Call' | 'Schedule Maintenance';
 export type AssessmentType = 'Excellent' | 'Satisfactory' | 'Unsatisfactory';
 
+export const LOCATIONS = [
+  "Marthas",
+  "Tijera",
+  "Feathers",
+  "Stacha",
+  "Do Some tin",
+  "Boardroom",
+  "Fusion",
+  "Chars",
+  "Edisha",
+  "Streetlife",
+  "Locos",
+  "Tipsy Turby",
+  "Nuh Say Nothing",
+  "Nice and Sweet",
+  "Dylans Bar",
+  "784 Bar",
+  "Sage Table - Barbuda",
+  "Extra Man - Barbuda"
+];
+
 export interface Technician {
   id: string;
   name: string;
   vehicleNumber: string;
   pin: string;
+  role?: 'admin' | 'user';
+}
+
+export interface PasswordRequest {
+  id: string;
+  techId: string;
+  techName: string;
+  vehicleNumber: string;
+  status: 'pending' | 'completed' | 'rejected';
+  timestamp: any;
 }
 
 export interface SavedSignature {
