@@ -5,6 +5,7 @@ import { WrenchIcon, ClipboardListIcon, UserIcon, LogoutIcon, SettingsIcon, Shie
 interface DashboardProps {
   currentUser: Technician;
   isAdmin: boolean;
+  pendingRequestCount: number;
   onSelectService: () => void;
   onSelectPM: () => void;
   onLogout: () => void;
@@ -12,7 +13,16 @@ interface DashboardProps {
   onOpenAdmin: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ currentUser, isAdmin, onSelectService, onSelectPM, onLogout, onOpenSettings, onOpenAdmin }) => {
+const Dashboard: React.FC<DashboardProps> = ({ 
+  currentUser, 
+  isAdmin, 
+  pendingRequestCount, 
+  onSelectService, 
+  onSelectPM, 
+  onLogout, 
+  onOpenSettings, 
+  onOpenAdmin 
+}) => {
   return (
     <div className="min-h-screen bg-orange-50 dark:bg-slate-950 p-4 md:p-8 flex flex-col items-center">
       {/* Header Bar */}
@@ -32,10 +42,15 @@ const Dashboard: React.FC<DashboardProps> = ({ currentUser, isAdmin, onSelectSer
               <button 
                 type="button"
                 onClick={onOpenAdmin}
-                className="p-3 bg-slate-800 text-yellow-500 rounded-xl shadow-lg border border-yellow-600 hover:bg-yellow-500 hover:text-black transition-all group animate-fade-in"
+                className="relative p-3 bg-slate-800 text-yellow-500 rounded-xl shadow-lg border border-yellow-600 hover:bg-yellow-500 hover:text-black transition-all group animate-fade-in"
                 title="Admin Panel"
               >
                 <ShieldIcon className="w-6 h-6" />
+                {pendingRequestCount > 0 && (
+                  <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-slate-900 shadow-sm animate-pulse">
+                    {pendingRequestCount}
+                  </span>
+                )}
               </button>
            )}
            <button 
